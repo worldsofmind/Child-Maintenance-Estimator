@@ -9,45 +9,32 @@ try:
     _orig_randomstate_ctor = getattr(_np_random_pickle, "__randomstate_ctor", None)
     if _orig_randomstate_ctor is not None:
         def _patched_randomstate_ctor(*args, **kwargs):
-            # Newer NumPy expects 0-1 args; some old pickles pass 2.
             try:
                 return _orig_randomstate_ctor(*args, **kwargs)
             except TypeError:
-                # Fall back to using only the first positional argument (state)
                 if len(args) >= 1:
                     return _orig_randomstate_ctor(args[0])
                 raise
         _np_random_pickle.__randomstate_ctor = _patched_randomstate_ctor  # type: ignore
 except Exception:
-    # Best-effort; if anything fails we leave defaults
     pass
 
 # Ensure custom class is resolvable even if pickled under __main__
-import sys as _sys
 try:
     from cm_model import CMPerChildModelRounded as _CMCls
     import __main__ as _mn
     _mn.CMPerChildModelRounded = _CMCls
 except Exception:
     pass
-# --- End compatibility patch ---
 
-
-# Ensure custom classes are importable for unpickling
-from cm_model import CMPerChildModelRounded
-
-st.set_page_config(page_title="Child Maintenance — Calculator", page_icon="👶", layout="centered")
-
-CANDIDATE_FILENAMES = [
-    "model_per_child_v2_calibrated_banded_rounded.joblib",
-    "model_hybrid_tight.joblib",
-    "model_cross_conformal.joblib",
-]
-
-def try_load_joblib(fobj):
+# ----------------- Helpers -----------------
+def try_load_joblib(fobj: BytesIO):
+    pos = fobj.tell()
     try:
         return joblib.load(fobj)
     except Exception as e_joblib:
+        try: fobj.seek(pos)
+        except Exception: pass
         try:
             return cloudpickle.load(fobj)
         except Exception as e_cp:
@@ -55,7 +42,11 @@ def try_load_joblib(fobj):
 
 def load_local_model():
     here = Path(__file__).parent.resolve()
-    for name in CANDIDATE_FILENAMES:
+    for name in [
+        "model_per_child_v2_calibrated_banded_rounded.joblib",
+        "model_hybrid_tight.joblib",
+        "model_cross_conformal.joblib",
+    ]:
         p = here / name
         if p.exists():
             with open(p, "rb") as f:
@@ -63,22 +54,99 @@ def load_local_model():
     return None
 
 def compute_eligible_count(ages, exception_case: int) -> int:
-    ages_nn = [a for a in ages if a is not None]
-    under21 = [a for a in ages_nn if a < 21]
-    adults  = [a for a in ages_nn if a >= 21]
-    return len(under21) + (1 if (int(exception_case)==1 and len(adults)>0) else 0)
+    # ages: list of floats (0 means N/A)
+    ages = [a for a in ages if a is not None]
+    eligible = 0
+    for a in ages:
+        if a <= 0:
+            continue
+        if a < 21:
+            eligible += 1
+        else:
+            if int(exception_case) == 1:
+                eligible += 1
+    return eligible
 
-st.title("Child Maintenance — Prediction + Range")
-st.caption("Outputs show a **$200-wide range rounded to the nearest $50** (lawyer-friendly display).")
+def build_feature_row(father, mother, child_count, ages, exception_case):
+    # ages as list length 4, floats
+    a1, a2, a3, a4 = [float(x) for x in (ages + [0,0,0,0])[:4]]
+    # Base columns expected by the model
+    d = {
+        "Father_income_cleaned": float(father),
+        "Mother_income_cleaned": float(mother),
+        "No. of children of the marriage": int(child_count),
+        "Child1_Age": a1,
+        "Child2_Age": a2,
+        "Child3_Age": a3,
+        "Child4_Age": a4,
+        "exception_case": int(exception_case),
+    }
+    # Eligible count
+    eligible_count = compute_eligible_count([a1,a2,a3,a4], exception_case)
+    d["Eligible_Child_Count"] = int(eligible_count)
 
+    # Derived income features
+    combined = d["Father_income_cleaned"] + d["Mother_income_cleaned"]
+    d["Combined_Income"] = combined
+    d["Income_Diff_Abs"] = abs(d["Father_income_cleaned"] - d["Mother_income_cleaned"])
+    d["Father_Share"] = (d["Father_income_cleaned"] / combined) if combined != 0 else 0.0
+    d["Mother_Share"] = (d["Mother_income_cleaned"] / combined) if combined != 0 else 0.0
+    den = max(eligible_count, 1)
+    d["Combined_Income_per_Eligible"] = combined / den
+    d["Father_Income_per_Eligible"] = d["Father_income_cleaned"] / den
+    d["Mother_Income_per_Eligible"] = d["Mother_income_cleaned"] / den
+    d["Is_Single_Income"] = int(d["Father_income_cleaned"] == 0 or d["Mother_income_cleaned"] == 0)
+    d["Combined_Income_Zero"] = int(combined == 0)
+
+    # Age arrays (0 means N/A)
+    ages_all = np.array([a1, a2, a3, a4], dtype=float)
+    ages_all = np.where(ages_all <= 0, np.nan, ages_all)
+
+    # 'All children' age features
+    d["Youngest_Age_All"] = float(np.nanmin(ages_all)) if not np.isnan(ages_all).all() else 0.0
+    d["Oldest_Age_All"]   = float(np.nanmax(ages_all)) if not np.isnan(ages_all).all() else 0.0
+    d["Avg_Age_All"]      = float(np.nanmean(ages_all)) if not np.isnan(ages_all).all() else 0.0
+    d["Age_Gap_All"]      = d["Oldest_Age_All"] - d["Youngest_Age_All"]
+
+    d["Count_Under7"]  = int(np.nansum(ages_all < 7))
+    d["Count_Under12"] = int(np.nansum(ages_all < 12))
+    d["Count_Under18"] = int(np.nansum(ages_all < 18))
+    d["Has_Adult"]     = int(np.nanmax(ages_all) >= 18 if not np.isnan(ages_all).all() else 0)
+
+    # Eligible-only ages
+    ages_elig = ages_all.copy()
+    if int(exception_case) == 0:
+        ages_elig = np.where(ages_elig >= 21, np.nan, ages_elig)
+    # else: keep 21+ as eligible
+
+    d["Youngest_Age_Eligible"] = float(np.nanmin(ages_elig)) if not np.isnan(ages_elig).all() else 0.0
+    d["Oldest_Age_Eligible"]   = float(np.nanmax(ages_elig)) if not np.isnan(ages_elig).all() else 0.0
+    d["Avg_Age_Eligible"]      = float(np.nanmean(ages_elig)) if not np.isnan(ages_elig).all() else 0.0
+
+    d["Eligible_Under12"]     = int(np.nansum(ages_elig < 12))
+    d["Eligible_Under18"]     = int(np.nansum(ages_elig < 18))
+    d["Has_Eligible_Adult"]   = int(np.nanmax(ages_elig) >= 18 if not np.isnan(ages_elig).all() else 0)
+
+    d["No_Children"] = int(int(child_count) == 0)
+    d["Children_to_Eligible_Ratio"] = (int(child_count) / max(eligible_count, 1)) if int(child_count) > 0 else 0.0
+
+    # 1-row DataFrame with exact column names
+    X = pd.DataFrame([d])
+    return X, eligible_count
+
+# ----------------- UI -----------------
+st.set_page_config(page_title="Child Maintenance Estimator", page_icon="👶", layout="centered")
+st.title("Child Maintenance Estimator")
+
+# Sidebar: model loading
 with st.sidebar:
-    st.markdown("### Model")
-    uploaded = st.file_uploader("Upload model (.joblib)", type=["joblib","pkl","pkl.gz"], accept_multiple_files=False)
+    st.header("Model")
+    uploaded = st.file_uploader("Upload .joblib (optional)", type=["joblib","pkl"])
     model = None
     if uploaded is not None:
         try:
-            model = try_load_joblib(BytesIO(uploaded.read()))
-            st.success("Loaded uploaded model.")
+            model = try_load_joblib(uploaded)
+            st.success("Uploaded model loaded.")
         except Exception as e:
             st.error(f"Could not load uploaded model: {e}")
     if model is None:
@@ -107,44 +175,26 @@ with st.form("inputs"):
     go = st.form_submit_button("Predict")
 
 if go:
-    if 'model' not in locals() or model is None:
-        model = load_local_model()
-
     if model is None:
         st.error("No model available. Upload a .joblib in the sidebar or place it next to app.py.")
     else:
-        ages = [a1, a2 if child_count>=2 else None, a3 if child_count>=3 else None, a4 if child_count>=4 else None]
-        ages = [float(a) for a in ages if a is not None]
-        ages = sorted(ages, reverse=True)[:4]
-        ages += [None]*(4-len(ages))
-
-        eligible_count = compute_eligible_count(ages, int(exc))
-
-        row = {
-            "Father_income_cleaned": float(father),
-            "Mother_income_cleaned": float(mother),
-            "No. of children of the marriage": int(child_count),
-            "Child1_Age": ages[0], "Child2_Age": ages[1], "Child3_Age": ages[2], "Child4_Age": ages[3],
-            "exception_case": int(exc),
-            "Eligible_Child_Count": int(eligible_count),
-        }
-        X_df = pd.DataFrame([row])
+        ages = [a1, a2 if child_count>=2 else 0.0, a3 if child_count>=3 else 0.0, a4 if child_count>=4 else 0.0]
+        X, eligible_count = build_feature_row(father, mother, child_count, ages, exc)
 
         try:
-            y_pred = model.predict(X_df)
+            y = model.predict(X)
+            y_pred = int(float(np.atleast_1d(y)[0]))
         except Exception as e:
             st.error(f"Model predict failed: {e}")
             st.stop()
 
-        y_pred = int(np.array(y_pred).ravel()[0])
-
         lo, hi = None, None
-        if hasattr(model, "predict_interval"):
-            try:
-                lo_arr, hi_arr = model.predict_interval(X_df)
-                lo, hi = int(np.array(lo_arr).ravel()[0]), int(np.array(hi_arr).ravel()[0])
-            except Exception:
-                pass
+        try:
+            lo_arr, hi_arr = model.predict_interval(X)
+            lo = int(float(np.atleast_1d(lo_arr)[0]))
+            hi = int(float(np.atleast_1d(hi_arr)[0]))
+        except Exception:
+            pass
 
         st.subheader("Predicted monthly child maintenance")
         if show_point:
@@ -157,4 +207,11 @@ if go:
         if show_details:
             with st.expander("Details", expanded=False):
                 st.write(f"Eligible children used: **{eligible_count}**")
-                st.write("Ages (oldest→youngest):", [ages[0], ages[1], ages[2], ages[3]])
+                st.write("Ages (oldest→youngest):", [a1, a2, a3, a4])
+
+# Show environment footer for debugging
+try:
+    import sklearn, numpy, pandas
+    st.caption(f"Env → sklearn {sklearn.__version__}, numpy {numpy.__version__}, pandas {pandas.__version__}")
+except Exception:
+    pass

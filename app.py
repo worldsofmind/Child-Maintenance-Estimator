@@ -3,6 +3,36 @@ import pandas as pd, numpy as np, joblib, cloudpickle
 from io import BytesIO
 from pathlib import Path
 
+# --- Compatibility patch for numpy RandomState pickles (handles __randomstate_ctor signature mismatches) ---
+try:
+    import numpy.random._pickle as _np_random_pickle  # type: ignore
+    _orig_randomstate_ctor = getattr(_np_random_pickle, "__randomstate_ctor", None)
+    if _orig_randomstate_ctor is not None:
+        def _patched_randomstate_ctor(*args, **kwargs):
+            # Newer NumPy expects 0-1 args; some old pickles pass 2.
+            try:
+                return _orig_randomstate_ctor(*args, **kwargs)
+            except TypeError:
+                # Fall back to using only the first positional argument (state)
+                if len(args) >= 1:
+                    return _orig_randomstate_ctor(args[0])
+                raise
+        _np_random_pickle.__randomstate_ctor = _patched_randomstate_ctor  # type: ignore
+except Exception:
+    # Best-effort; if anything fails we leave defaults
+    pass
+
+# Ensure custom class is resolvable even if pickled under __main__
+import sys as _sys
+try:
+    from cm_model import CMPerChildModelRounded as _CMCls
+    import __main__ as _mn
+    _mn.CMPerChildModelRounded = _CMCls
+except Exception:
+    pass
+# --- End compatibility patch ---
+
+
 # Ensure custom classes are importable for unpickling
 from cm_model import CMPerChildModelRounded
 

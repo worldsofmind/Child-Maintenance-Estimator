@@ -207,13 +207,19 @@ with st.form("inputs"):
         # Only render rows for the selected number of children (rest become 0.0 internally)
         for i in range(1, 5):
             if i <= int(child_count):
-                u = st.checkbox(f"Child {i} is under 1 year old", value=False, key=f"u{i}")
-                yrs = st.number_input(
-                    f"Child {i} age (years)",
-                    min_value=0.0, max_value=25.0, step=1.0, value=0.0, format="%.0f",
-                    help="Enter whole years only; tick the box above if under 1", disabled=u, key=f"a{i}_years"
-                )
-                ages.append(0.5 if u else yrs)
+                r1, r2 = st.columns([1, 2])
+                u = r1.checkbox(f"Child {i} under 1", value=False, key=f"u{i}")
+                if u:
+                    # Hide the numeric input; just show a friendly note. Internally use 0.5 yrs.
+                    r2.markdown("Age: **Under 1** (≈ 6 months)")
+                    ages.append(0.5)
+                else:
+                    yrs = r2.number_input(
+                        f"Child {i} age (years)",
+                        min_value=0.0, max_value=25.0, step=1.0, value=0.0, format="%.0f",
+                        help="Enter whole years only"
+                    )
+                    ages.append(yrs)
             else:
                 ages.append(0.0)
 

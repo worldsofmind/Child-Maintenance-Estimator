@@ -14,15 +14,14 @@ st.set_page_config(page_title="Child Maintenance Estimator", page_icon="👶", l
 # NumPy RandomState pickle signature shim (handles "__randomstate_ctor" TypeError in some pickles)
 try:
     import numpy.random._pickle as _np_random_pickle  # type: ignore[attr-defined]
-    _orig_randomstate_ctor = getattr(_np_random_pickle, "__randomstate_ctor", None)
+    _orig_randomstate_ctor = getattr(_np_randomstate_ctor if ' _np_randomstate_ctor' in globals() else _np_random_pickle, "__randomstate_ctor", None)  # noqa: E501
     if _orig_randomstate_ctor is not None:
         def _patched_randomstate_ctor(*args, **kwargs):
             try:
                 return _orig_randomstate_ctor(*args, **kwargs)
             except TypeError:
-                # Some old pickles pass 2 positional args; use just the first (state)
                 if len(args) >= 1:
-                    return _orig_randomstate_ctor(args[0])
+                    return _orig_randomstate_ctor(args[0])  # use only the state
                 raise
         _np_random_pickle.__randomstate_ctor = _patched_randomstate_ctor  # type: ignore[attr-defined]
 except Exception:
@@ -47,10 +46,8 @@ def try_load_joblib(fobj: BytesIO):
     try:
         return joblib.load(fobj)
     except Exception as e_joblib:
-        try:
-            fobj.seek(pos)
-        except Exception:
-            pass
+        try: fobj.seek(pos)
+        except Exception: pass
         try:
             return cloudpickle.load(fobj)
         except Exception as e_cp:
@@ -168,7 +165,6 @@ def build_feature_row(father, mother, child_count, ages, exception_case):
 # -----------------------------------------------------------------------------
 st.title("Child Maintenance Estimator")
 
-# Sidebar – minimal (no uploader, no 'Show details'); keep a point-toggle if you like
 with st.sidebar:
     st.header("Options")
     show_point = st.checkbox("Show point prediction", value=True)
@@ -183,9 +179,9 @@ with st.sidebar:
     except Exception:
         pass
 
-# Inputs start at 0 and render as whole numbers (no .00)
 with st.form("inputs"):
     c1, c2 = st.columns(2)
+
     with c1:
         father = st.number_input(
             "Father income (monthly)",
@@ -195,32 +191,51 @@ with st.form("inputs"):
             "No. of children of the marriage",
             min_value=1.0, max_value=4.0, step=1.0, value=1.0, format="%.0f"
         )
-        # cast back to int after the form
         exc = st.selectbox("Exception case (NS/schooling/disability)", options=[0, 1], index=0)
+
     with c2:
         mother = st.number_input(
             "Mother income (monthly)",
             min_value=0.0, step=50.0, value=0.0, format="%.0f"
         )
-        a1 = st.number_input(
-            "Child1 age (oldest)",
-            min_value=0.0, max_value=25.0, step=1.0, value=0.0, format="%.0f"
-        )
-        a2 = st.number_input(
-            "Child2 age",
+
+        st.markdown("**Children's Ages**")
+        # Child 1
+        u1 = st.checkbox("Child 1 is under 1 year old", value=False, key="u1")
+        a1_years = st.number_input(
+            "Child 1 age (years)",
             min_value=0.0, max_value=25.0, step=1.0, value=0.0, format="%.0f",
-            help="Leave 0 if not applicable"
+            disabled=u1
         )
-        a3 = st.number_input(
-            "Child3 age",
+        a1 = 0.5 if u1 else a1_years
+
+        # Child 2
+        u2 = st.checkbox("Child 2 is under 1 year old", value=False, key="u2")
+        a2_years = st.number_input(
+            "Child 2 age (years)",
             min_value=0.0, max_value=25.0, step=1.0, value=0.0, format="%.0f",
-            help="Leave 0 if not applicable"
+            help="Leave 0 if not applicable", disabled=u2
         )
-        a4 = st.number_input(
-            "Child4 age",
+        a2 = 0.5 if u2 else a2_years
+
+        # Child 3
+        u3 = st.checkbox("Child 3 is under 1 year old", value=False, key="u3")
+        a3_years = st.number_input(
+            "Child 3 age (years)",
             min_value=0.0, max_value=25.0, step=1.0, value=0.0, format="%.0f",
-            help="Leave 0 if not applicable"
+            help="Leave 0 if not applicable", disabled=u3
         )
+        a3 = 0.5 if u3 else a3_years
+
+        # Child 4
+        u4 = st.checkbox("Child 4 is under 1 year old", value=False, key="u4")
+        a4_years = st.number_input(
+            "Child 4 age (years)",
+            min_value=0.0, max_value=25.0, step=1.0, value=0.0, format="%.0f",
+            help="Leave 0 if not applicable", disabled=u4
+        )
+        a4 = 0.5 if u4 else a4_years
+
     go = st.form_submit_button("Predict")
 
 if go:

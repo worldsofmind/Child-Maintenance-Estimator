@@ -168,10 +168,10 @@ with st.expander("Learn more about the model", expanded=False):
 The estimator uses a small set of factors to produce a realistic starting point. Practitioners can then consider: (a) contribution split by relative incomes; (b) per-child allocation by age/needs.
 
 **Design of model**  
-Trained on LAB case data. Focused on practical, high-signal factors. Aims to keep the range within about **$200**. Not a court decision — it’s a guide to help begin negotiations (Women’s Charter factors can follow).
+Trained on LAB case data. Focused on practical, high-signal factors. Aims to keep the range within about **$200**. 
 
-**Eligibility note (children ≥21)**  
-Where an exception applies (e.g., National Service, **still studying full-time**, disability), adult child(ren) are included. In this pilot we count all children under 21 and, if an exception applies, include up to **one** adult child (≥21).
+**Disclaimer**  
+The predicted maintenance range is an estimate based on provided inputs and should not be considered as legal or financial advice. It’s a guide to help begin negotiations.
 """)
 
 with st.sidebar:

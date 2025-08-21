@@ -184,7 +184,7 @@ The predicted maintenance range is an estimate based on provided inputs and shou
 
 with st.sidebar:
     st.header("Options")
-    show_point = st.checkbox("Show point prediction", value=True)
+    show_point = st.checkbox("Show point prediction", value=False)
     # tiny model/env status footer
     try:
         import sklearn, numpy, pandas

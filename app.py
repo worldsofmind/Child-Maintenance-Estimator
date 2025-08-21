@@ -74,8 +74,7 @@ def _load_model_from_repo(path_str: str, file_hash: str):
 _here = Path(__file__).parent.resolve()
 _model_path = _here / MODEL_FILENAME
 if not _model_path.exists():
-    st.error(f"Model file '{MODEL_FILENAME}' not found in the repo root. "
-             f"Please add it next to app.py and redeploy.")
+    st.error(f"Model file '{MODEL_FILENAME}' not found in the repo root. Add it next to app.py and redeploy.")
     st.stop()
 
 _model_hash = _file_md5(_model_path)
@@ -85,7 +84,6 @@ model = _load_model_from_repo(str(_model_path), _model_hash)
 # Feature engineering (build exactly what the model expects)
 # -----------------------------------------------------------------------------
 def compute_eligible_count(ages, exception_case: int) -> int:
-    # ages: list of floats (<=0 means N/A)
     eligible = 0
     for a in ages:
         if a is None or a <= 0:
@@ -98,25 +96,17 @@ def compute_eligible_count(ages, exception_case: int) -> int:
     return eligible
 
 def build_feature_row(father, mother, child_count, ages, exception_case):
-    # ages length 4; unused ages should be 0
     a1, a2, a3, a4 = [float(x) for x in (ages + [0, 0, 0, 0])[:4]]
-
     d = {
         "Father_income_cleaned": float(father),
         "Mother_income_cleaned": float(mother),
         "No. of children of the marriage": int(child_count),
-        "Child1_Age": a1,
-        "Child2_Age": a2,
-        "Child3_Age": a3,
-        "Child4_Age": a4,
+        "Child1_Age": a1, "Child2_Age": a2, "Child3_Age": a3, "Child4_Age": a4,
         "exception_case": int(exception_case),
     }
-
-    # Eligible count
     eligible_count = compute_eligible_count([a1, a2, a3, a4], exception_case)
     d["Eligible_Child_Count"] = int(eligible_count)
 
-    # Income-derived features
     combined = d["Father_income_cleaned"] + d["Mother_income_cleaned"]
     d["Combined_Income"] = combined
     d["Income_Diff_Abs"] = abs(d["Father_income_cleaned"] - d["Mother_income_cleaned"])
@@ -129,11 +119,9 @@ def build_feature_row(father, mother, child_count, ages, exception_case):
     d["Is_Single_Income"] = int(d["Father_income_cleaned"] == 0 or d["Mother_income_cleaned"] == 0)
     d["Combined_Income_Zero"] = int(combined == 0)
 
-    # Age arrays (0 or less → NaN)
     ages_all = np.array([a1, a2, a3, a4], dtype=float)
     ages_all = np.where(ages_all <= 0, np.nan, ages_all)
 
-    # All-children age features
     d["Youngest_Age_All"] = float(np.nanmin(ages_all)) if not np.isnan(ages_all).all() else 0.0
     d["Oldest_Age_All"]   = float(np.nanmax(ages_all)) if not np.isnan(ages_all).all() else 0.0
     d["Avg_Age_All"]      = float(np.nanmean(ages_all)) if not np.isnan(ages_all).all() else 0.0
@@ -144,7 +132,6 @@ def build_feature_row(father, mother, child_count, ages, exception_case):
     d["Count_Under18"] = int(np.nansum(ages_all < 18))
     d["Has_Adult"]     = int(np.nanmax(ages_all) >= 18 if not np.isnan(ages_all).all() else 0)
 
-    # Eligible-only age features
     ages_elig = ages_all.copy()
     if int(exception_case) == 0:
         ages_elig = np.where(ages_elig >= 21, np.nan, ages_elig)
@@ -160,13 +147,34 @@ def build_feature_row(father, mother, child_count, ages, exception_case):
     d["No_Children"] = int(int(child_count) == 0)
     d["Children_to_Eligible_Ratio"] = (int(child_count) / max(eligible_count, 1)) if int(child_count) > 0 else 0.0
 
-    X = pd.DataFrame([d])
-    return X, eligible_count
+    return pd.DataFrame([d]), eligible_count
 
 # -----------------------------------------------------------------------------
 # UI
 # -----------------------------------------------------------------------------
 st.title("Child Maintenance Estimator")
+
+# Compact description
+st.info(
+    "**What this tool does**  \n"
+    "• Gives a quick, ballpark estimate of the **family’s total monthly child maintenance**.  \n"
+    "• Built for **practitioners** (e.g., legal clinics); **not** public self-service.  \n"
+    "• Shows a **range** (≈ $200 wide); this is **not legal advice**.  \n"
+    "• Children **≥21** are counted only if **NS / still studying full-time / disability** (pilot includes up to **one** adult child)."
+)
+
+# Optional: full details in a collapsed section
+with st.expander("Learn more about the model", expanded=False):
+    st.markdown("""
+**Purpose of model**  
+The estimator uses a small set of factors to produce a realistic starting point. Practitioners can then consider: (a) contribution split by relative incomes; (b) per-child allocation by age/needs.
+
+**Design of model**  
+Trained on LAB case data. Focused on practical, high-signal factors. Aims to keep the range within about **$200**. Not a court decision — it’s a guide to help begin negotiations (Women’s Charter factors can follow).
+
+**Eligibility note (children ≥21)**  
+Where an exception applies (e.g., National Service, **still studying full-time**, disability), adult child(ren) are included. In this pilot we count all children under 21 and, if an exception applies, include up to **one** adult child (≥21).
+""")
 
 with st.sidebar:
     st.header("Options")

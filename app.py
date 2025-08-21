@@ -4,9 +4,14 @@ from io import BytesIO
 from pathlib import Path
 
 # -----------------------------------------------------------------------------
+# Page config
+# -----------------------------------------------------------------------------
+st.set_page_config(page_title="Child Maintenance Estimator", page_icon="👶", layout="centered")
+
+# -----------------------------------------------------------------------------
 # Compatibility shims (safe, no-ops if not needed)
 # -----------------------------------------------------------------------------
-# NumPy RandomState pickle signature shim (handles "__randomstate_ctor" TypeError)
+# NumPy RandomState pickle signature shim (handles "__randomstate_ctor" TypeError in some pickles)
 try:
     import numpy.random._pickle as _np_random_pickle  # type: ignore[attr-defined]
     _orig_randomstate_ctor = getattr(_np_random_pickle, "__randomstate_ctor", None)
@@ -23,7 +28,7 @@ try:
 except Exception:
     pass
 
-# Make sure the custom class is resolvable even if it was pickled under __main__
+# Ensure the custom class is resolvable even if it was pickled under __main__
 try:
     from cm_model import CMPerChildModelRounded as _CMCls
     import __main__ as _mn
@@ -69,7 +74,6 @@ def _load_model_from_repo(path_str: str, file_hash: str):
 _here = Path(__file__).parent.resolve()
 _model_path = _here / MODEL_FILENAME
 if not _model_path.exists():
-    st.set_page_config(page_title="Child Maintenance Estimator", page_icon="👶", layout="centered")
     st.error(f"Model file '{MODEL_FILENAME}' not found in the repo root. "
              f"Please add it next to app.py and redeploy.")
     st.stop()
@@ -162,10 +166,9 @@ def build_feature_row(father, mother, child_count, ages, exception_case):
 # -----------------------------------------------------------------------------
 # UI
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Child Maintenance Estimator", page_icon="👶", layout="centered")
 st.title("Child Maintenance Estimator")
 
-# Sidebar – cleaned (no uploader, no "Show details")
+# Sidebar – minimal (no uploader, no 'Show details'); keep a point-toggle if you like
 with st.sidebar:
     st.header("Options")
     show_point = st.checkbox("Show point prediction", value=True)
@@ -180,21 +183,51 @@ with st.sidebar:
     except Exception:
         pass
 
+# Inputs start at 0 and render as whole numbers (no .00)
 with st.form("inputs"):
     c1, c2 = st.columns(2)
     with c1:
-        father = st.number_input("Father income (monthly)", min_value=0.0, step=50.0, value=2000.0)
-        child_count = st.number_input("No. of children of the marriage", min_value=1, max_value=4, step=1, value=1)
+        father = st.number_input(
+            "Father income (monthly)",
+            min_value=0.0, step=50.0, value=0.0, format="%.0f"
+        )
+        child_count = st.number_input(
+            "No. of children of the marriage",
+            min_value=1.0, max_value=4.0, step=1.0, value=1.0, format="%.0f"
+        )
+        # cast back to int after the form
         exc = st.selectbox("Exception case (NS/schooling/disability)", options=[0, 1], index=0)
     with c2:
-        mother = st.number_input("Mother income (monthly)", min_value=0.0, step=50.0, value=1500.0)
-        a1 = st.number_input("Child1 age (oldest)", min_value=0.0, max_value=25.0, step=1.0, value=10.0)
-        a2 = st.number_input("Child2 age", min_value=0.0, max_value=25.0, step=1.0, value=0.0, help="Leave 0 if not applicable")
-        a3 = st.number_input("Child3 age", min_value=0.0, max_value=25.0, step=1.0, value=0.0, help="Leave 0 if not applicable")
-        a4 = st.number_input("Child4 age", min_value=0.0, max_value=25.0, step=1.0, value=0.0, help="Leave 0 if not applicable")
+        mother = st.number_input(
+            "Mother income (monthly)",
+            min_value=0.0, step=50.0, value=0.0, format="%.0f"
+        )
+        a1 = st.number_input(
+            "Child1 age (oldest)",
+            min_value=0.0, max_value=25.0, step=1.0, value=0.0, format="%.0f"
+        )
+        a2 = st.number_input(
+            "Child2 age",
+            min_value=0.0, max_value=25.0, step=1.0, value=0.0, format="%.0f",
+            help="Leave 0 if not applicable"
+        )
+        a3 = st.number_input(
+            "Child3 age",
+            min_value=0.0, max_value=25.0, step=1.0, value=0.0, format="%.0f",
+            help="Leave 0 if not applicable"
+        )
+        a4 = st.number_input(
+            "Child4 age",
+            min_value=0.0, max_value=25.0, step=1.0, value=0.0, format="%.0f",
+            help="Leave 0 if not applicable"
+        )
     go = st.form_submit_button("Predict")
 
 if go:
+    # Coerce numeric types cleanly
+    child_count = int(child_count)
+    exc = int(exc)
+
     # Respect chosen child count for ages beyond N (force to 0)
     ages = [
         a1,

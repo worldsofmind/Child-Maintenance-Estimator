@@ -159,8 +159,6 @@ st.info(
     "**What this tool does**  \n"
     "• Gives a quick, ballpark estimate of the **family’s total monthly child maintenance**.  \n"
     "• Built for **practitioners** (e.g., legal clinics); **not** public self-service.  \n"
-    "• Shows a **range** (≈ $200 wide); this is **not legal advice**.  \n"
-    "• Children **≥21** are counted only if **NS / still studying full-time / disability** (pilot includes up to **one** adult child)."
 )
 
 # Optional: full details in a collapsed section

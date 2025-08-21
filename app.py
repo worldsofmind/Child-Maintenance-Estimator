@@ -165,11 +165,10 @@ def build_feature_row(father, mother, child_count, ages, exception_case):
 st.set_page_config(page_title="Child Maintenance Estimator", page_icon="👶", layout="centered")
 st.title("Child Maintenance Estimator")
 
-# Sidebar – no uploader; just options + model info
+# Sidebar – cleaned (no uploader, no "Show details")
 with st.sidebar:
     st.header("Options")
     show_point = st.checkbox("Show point prediction", value=True)
-    show_details = st.checkbox("Show details", value=False)
     # tiny model/env status footer
     try:
         import sklearn, numpy, pandas
@@ -234,15 +233,9 @@ if go:
     if lo is not None and hi is not None:
         st.success(f"Range: **${lo:,} — ${hi:,}**")
 
-    if show_details:
-        with st.expander("Details", expanded=False):
-            st.write(f"Eligible children used: **{eligible_count}**")
-            st.write("Ages (oldest→youngest):", ages)
-
 # Final tiny footer (safe if versions unavailable)
 try:
     import sklearn, numpy, pandas
     st.caption(f"Env → sklearn {sklearn.__version__}, numpy {numpy.__version__}, pandas {pandas.__version__}")
 except Exception:
     pass
-

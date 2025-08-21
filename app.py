@@ -11,6 +11,7 @@ st.set_page_config(page_title="Child Maintenance Estimator", page_icon="👶", l
 # -----------------------------------------------------------------------------
 # Compatibility shims (safe, no-ops if not needed)
 # -----------------------------------------------------------------------------
+# NumPy RandomState pickle signature shim (handles "__randomstate_ctor" TypeError in some pickles)
 try:
     import numpy.random._pickle as _np_random_pickle  # type: ignore[attr-defined]
     _orig_randomstate_ctor = getattr(_np_random_pickle, "__randomstate_ctor", None)
@@ -19,6 +20,7 @@ try:
             try:
                 return _orig_randomstate_ctor(*args, **kwargs)
             except TypeError:
+                # Some old pickles pass 2 positional args; use just the first (state)
                 if len(args) >= 1:
                     return _orig_randomstate_ctor(args[0])
                 raise
@@ -40,12 +42,15 @@ except Exception:
 MODEL_FILENAME = "model_per_child_v2_calibrated_banded_rounded.joblib"
 
 def try_load_joblib(fobj: BytesIO):
+    """Attempt joblib first, then cloudpickle (for rare cases)."""
     pos = fobj.tell()
     try:
         return joblib.load(fobj)
     except Exception as e_joblib:
-        try: fobj.seek(pos)
-        except Exception: pass
+        try:
+            fobj.seek(pos)
+        except Exception:
+            pass
         try:
             return cloudpickle.load(fobj)
         except Exception as e_cp:
@@ -62,13 +67,15 @@ def _file_md5(path: Path) -> str:
 
 @st.cache_resource
 def _load_model_from_repo(path_str: str, file_hash: str):
+    """Cache key includes file hash so replacing the model auto-invalidates cache."""
     with open(path_str, "rb") as f:
         return try_load_joblib(f)
 
 _here = Path(__file__).parent.resolve()
 _model_path = _here / MODEL_FILENAME
 if not _model_path.exists():
-    st.error(f"Model file '{MODEL_FILENAME}' not found in the repo root. Add it next to app.py and redeploy.")
+    st.error(f"Model file '{MODEL_FILENAME}' not found in the repo root. "
+             f"Please add it next to app.py and redeploy.")
     st.stop()
 
 _model_hash = _file_md5(_model_path)
@@ -78,6 +85,7 @@ model = _load_model_from_repo(str(_model_path), _model_hash)
 # Feature engineering (build exactly what the model expects)
 # -----------------------------------------------------------------------------
 def compute_eligible_count(ages, exception_case: int) -> int:
+    # ages: list of floats (<=0 means N/A)
     eligible = 0
     for a in ages:
         if a is None or a <= 0:
@@ -90,17 +98,25 @@ def compute_eligible_count(ages, exception_case: int) -> int:
     return eligible
 
 def build_feature_row(father, mother, child_count, ages, exception_case):
+    # ages length 4; unused ages should be 0
     a1, a2, a3, a4 = [float(x) for x in (ages + [0, 0, 0, 0])[:4]]
+
     d = {
         "Father_income_cleaned": float(father),
         "Mother_income_cleaned": float(mother),
         "No. of children of the marriage": int(child_count),
-        "Child1_Age": a1, "Child2_Age": a2, "Child3_Age": a3, "Child4_Age": a4,
+        "Child1_Age": a1,
+        "Child2_Age": a2,
+        "Child3_Age": a3,
+        "Child4_Age": a4,
         "exception_case": int(exception_case),
     }
+
+    # Eligible count
     eligible_count = compute_eligible_count([a1, a2, a3, a4], exception_case)
     d["Eligible_Child_Count"] = int(eligible_count)
 
+    # Income-derived features
     combined = d["Father_income_cleaned"] + d["Mother_income_cleaned"]
     d["Combined_Income"] = combined
     d["Income_Diff_Abs"] = abs(d["Father_income_cleaned"] - d["Mother_income_cleaned"])
@@ -113,9 +129,11 @@ def build_feature_row(father, mother, child_count, ages, exception_case):
     d["Is_Single_Income"] = int(d["Father_income_cleaned"] == 0 or d["Mother_income_cleaned"] == 0)
     d["Combined_Income_Zero"] = int(combined == 0)
 
+    # Age arrays (0 or less → NaN)
     ages_all = np.array([a1, a2, a3, a4], dtype=float)
     ages_all = np.where(ages_all <= 0, np.nan, ages_all)
 
+    # All-children age features
     d["Youngest_Age_All"] = float(np.nanmin(ages_all)) if not np.isnan(ages_all).all() else 0.0
     d["Oldest_Age_All"]   = float(np.nanmax(ages_all)) if not np.isnan(ages_all).all() else 0.0
     d["Avg_Age_All"]      = float(np.nanmean(ages_all)) if not np.isnan(ages_all).all() else 0.0
@@ -126,6 +144,7 @@ def build_feature_row(father, mother, child_count, ages, exception_case):
     d["Count_Under18"] = int(np.nansum(ages_all < 18))
     d["Has_Adult"]     = int(np.nanmax(ages_all) >= 18 if not np.isnan(ages_all).all() else 0)
 
+    # Eligible-only age features
     ages_elig = ages_all.copy()
     if int(exception_case) == 0:
         ages_elig = np.where(ages_elig >= 21, np.nan, ages_elig)
@@ -141,7 +160,8 @@ def build_feature_row(father, mother, child_count, ages, exception_case):
     d["No_Children"] = int(int(child_count) == 0)
     d["Children_to_Eligible_Ratio"] = (int(child_count) / max(eligible_count, 1)) if int(child_count) > 0 else 0.0
 
-    return pd.DataFrame([d]), eligible_count
+    X = pd.DataFrame([d])
+    return X, eligible_count
 
 # -----------------------------------------------------------------------------
 # UI
@@ -151,6 +171,7 @@ st.title("Child Maintenance Estimator")
 with st.sidebar:
     st.header("Options")
     show_point = st.checkbox("Show point prediction", value=True)
+    # tiny model/env status footer
     try:
         import sklearn, numpy, pandas
         ts = datetime.datetime.fromtimestamp(os.path.getmtime(_model_path))
@@ -163,6 +184,7 @@ with st.sidebar:
 
 # Inputs (no form → widgets rerender instantly)
 c1, c2 = st.columns(2)
+
 with c1:
     father = st.number_input("Father income (monthly)", min_value=0.0, step=50.0, value=0.0,
                              format="%.0f", key="father_income")
@@ -170,7 +192,12 @@ with c1:
                              format="%.0f", key="mother_income")
     child_count = st.number_input("No. of children of the marriage", min_value=1.0, max_value=4.0,
                                   step=1.0, value=1.0, format="%.0f", key="child_count")
-    exc = st.selectbox("Exception case (NS/schooling/disability)", options=[0, 1], index=0, key="exc")
+    exc_choice = st.radio(
+        "Do any children aged 21 or older still qualify as dependent (NS / still studying full-time / disability)?",
+        ["No", "Yes"], horizontal=True,
+        help="Select 'Yes' if at least one child aged 21+ is still dependent due to National Service, still studying full-time, or disability."
+    )
+    exc = 1 if exc_choice == "Yes" else 0
 
 with c2:
     st.markdown("**Children's Ages**")
@@ -189,13 +216,23 @@ with c2:
         else:
             ages.append(0.0)
 
+# Context hint: if any age ≥ 21 while exceptions = No, warn the user
+try:
+    has_over21 = any(a >= 21 for a in ages[:int(child_count)])
+    if has_over21 and exc == 0:
+        st.warning("You entered an age of 21 or older. If that child is still dependent (NS/still studying full-time/disability), switch the option above to **Yes** to count them as eligible.")
+except Exception:
+    pass
+
 go = st.button("Predict")
 
 if go:
+    # Coerce numeric types
     child_count = int(child_count)
-    exc = int(exc)
+
     X, eligible_count = build_feature_row(father, mother, child_count, ages, exc)
 
+    # Predict
     try:
         y = model.predict(X)
         y_pred = int(float(np.atleast_1d(y)[0]))
@@ -203,6 +240,7 @@ if go:
         st.error(f"Model predict failed: {e}")
         st.stop()
 
+    # Interval (prefer model's own; otherwise display-only fallback: centered $200 width, $50 rounding)
     lo, hi = None, None
     try:
         lo_arr, hi_arr = model.predict_interval(X)
@@ -215,13 +253,14 @@ if go:
         def _snap50(v): return int(round(v / 50.0) * 50)
         lo, hi = _snap50(lo), _snap50(hi)
 
+    # Output
     st.subheader("Predicted monthly child maintenance")
     if show_point:
         st.info(f"Point estimate: **${y_pred:,}**")
     if lo is not None and hi is not None:
         st.success(f"Range: **${lo:,} — ${hi:,}**")
 
-# Footer
+# Final tiny footer (safe if versions unavailable)
 try:
     import sklearn, numpy, pandas
     st.caption(f"Env → sklearn {sklearn.__version__}, numpy {numpy.__version__}, pandas {pandas.__version__}")

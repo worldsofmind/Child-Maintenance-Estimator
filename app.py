@@ -81,6 +81,13 @@ _model_hash = _file_md5(_model_path)
 model = _load_model_from_repo(str(_model_path), _model_hash)
 
 # -----------------------------------------------------------------------------
+# Helpers
+# -----------------------------------------------------------------------------
+def money(x: float) -> str:
+    """Format currency without triggering math mode."""
+    return f"\\${int(x):,}"
+
+# -----------------------------------------------------------------------------
 # Feature engineering (build exactly what the model expects)
 # -----------------------------------------------------------------------------
 def compute_eligible_count(ages, exception_case: int) -> int:
@@ -259,12 +266,12 @@ if go:
         def _snap50(v): return int(round(v / 50.0) * 50)
         lo, hi = _snap50(lo), _snap50(hi)
 
-    # Output
+    # Output (escape $ to avoid math font)
     st.subheader("Predicted monthly child maintenance")
     if show_point:
-        st.info(f"Point estimate: **${y_pred:,}**")
+        st.info(f"Point estimate: **{money(y_pred)}**")
     if lo is not None and hi is not None:
-        st.success(f"Range: **${lo:,} — ${hi:,}**")
+        st.success(f"Range: **{money(lo)} — {money(hi)}**")
 
 # Final tiny footer (safe if versions unavailable)
 try:

@@ -273,10 +273,3 @@ if go:
         st.info(f"Point estimate: **{money(y_pred)}**")
     if lo is not None and hi is not None:
         st.success(f"Range: **{money(lo)} — {money(hi)}**")
-
-# Final tiny footer (safe if versions unavailable)
-try:
-    import sklearn, numpy, pandas
-    st.caption(f"Env → sklearn {sklearn.__version__}, numpy {numpy.__version__}, pandas {pandas.__version__}")
-except Exception:
-    pass

@@ -11,13 +11,12 @@ st.set_page_config(
     page_title="Child Maintenance Estimator",
     page_icon="👶",
     layout="centered",
-    initial_sidebar_state="collapsed",  # Sidebar collapsed on first load
+    initial_sidebar_state="collapsed",
 )
 
 # -----------------------------------------------------------------------------
-# Compatibility shims (safe, no-ops if not needed)
+# Compatibility shims
 # -----------------------------------------------------------------------------
-# NumPy RandomState pickle signature shim (handles "__randomstate_ctor" TypeError in some pickles)
 try:
     import numpy.random._pickle as _np_random_pickle  # type: ignore[attr-defined]
     _orig_randomstate_ctor = getattr(_np_random_pickle, "__randomstate_ctor", None)
@@ -26,7 +25,6 @@ try:
             try:
                 return _orig_randomstate_ctor(*args, **kwargs)
             except TypeError:
-                # Some old pickles pass 2 positional args; use just the first (state)
                 if len(args) >= 1:
                     return _orig_randomstate_ctor(args[0])
                 raise
@@ -34,7 +32,6 @@ try:
 except Exception:
     pass
 
-# Ensure the custom class is resolvable even if it was pickled under __main__
 try:
     from cm_model import CMPerChildModelRounded as _CMCls
     import __main__ as _mn
@@ -43,16 +40,14 @@ except Exception:
     pass
 
 # -----------------------------------------------------------------------------
-# Model loading (auto, cached). No uploader shown to end users.
+# Model loading
 # -----------------------------------------------------------------------------
-# Prefer the new symmetric per-child pipeline artifact; fall back to old artifact if needed.
 CANDIDATE_MODEL_FILENAMES = [
-    "gb_per_child_perchild_symmetric.joblib",              # new symmetric per-child pipeline (preferred)
-    "model_per_child_v2_calibrated_banded_rounded.joblib" # legacy artifact
+    "gb_per_child_perchild_symmetric.joblib",
+    "model_per_child_v2_calibrated_banded_rounded.joblib"
 ]
 
 def try_load_joblib(fobj: BytesIO):
-    """Attempt joblib first, then cloudpickle (for rare cases)."""
     pos = fobj.tell()
     try:
         return joblib.load(fobj)
@@ -77,13 +72,11 @@ def _file_md5(path: Path) -> str:
 
 @st.cache_resource
 def _load_model_from_repo(path_str: str, file_hash: str):
-    """Cache key includes file hash so replacing the model auto-invalidates cache."""
     with open(path_str, "rb") as f:
         return try_load_joblib(f)
 
 _here = Path(__file__).parent.resolve()
 
-# Choose the first candidate that exists
 _model_path = None
 for nm in CANDIDATE_MODEL_FILENAMES:
     p = _here / nm
@@ -98,15 +91,13 @@ if _model_path is None:
 _model_hash = _file_md5(_model_path)
 model = _load_model_from_repo(str(_model_path), _model_hash)
 
-# If we loaded a per-child pipeline directly (symmetric model), wrap it so the app's API stays the same.
 try:
     from sklearn.base import BaseEstimator
     from cm_model import CMPerChildModelRounded as _CMCls
     if not hasattr(model, "predict_interval"):
-        # Assume it's a per-child regressor pipeline → wrap with our standard container
         _wrapper = _CMCls()
-        _wrapper.prep = None      # pipeline handles its own preprocessing if any
-        _wrapper.gb_pc_ = model   # pipeline outputs per-child prediction
+        _wrapper.prep = None
+        _wrapper.gb_pc_ = model
         _wrapper.iso_ = None
         model = _wrapper
 except Exception:
@@ -116,11 +107,10 @@ except Exception:
 # Helpers
 # -----------------------------------------------------------------------------
 def money(x: float) -> str:
-    """Format currency without triggering math mode (escaped $, shown as S$)."""
     return f"S\${int(x):,}"
 
 # -----------------------------------------------------------------------------
-# Symmetric feature engineering (parent-invariant)
+# Symmetric feature engineering (only 27 features)
 # -----------------------------------------------------------------------------
 def compute_eligible_count(ages, exception_case: int) -> int:
     eligible = 0
@@ -135,7 +125,6 @@ def compute_eligible_count(ages, exception_case: int) -> int:
     return eligible
 
 def build_feature_row(father, mother, child_count, ages, exception_case):
-    # NOTE: This replaces directional shares with symmetric features, while keeping UI and outputs unchanged.
     a1, a2, a3, a4 = [float(x) for x in (ages + [0, 0, 0, 0])[:4]]
     d = {
         "Father_income_cleaned": float(father),
@@ -163,11 +152,9 @@ def build_feature_row(father, mother, child_count, ages, exception_case):
     d["Oldest_Age_All"]   = float(np.nanmax(ages_all)) if not np.isnan(ages_all).all() else 0.0
     d["Avg_Age_All"]      = float(np.nanmean(ages_all)) if not np.isnan(ages_all).all() else 0.0
     d["Age_Gap_All"]      = d["Oldest_Age_All"] - d["Youngest_Age_All"]
-
     d["Count_Under7"]  = int(np.nansum(ages_all < 7))
     d["Count_Under12"] = int(np.nansum(ages_all < 12))
     d["Count_Under18"] = int(np.nansum(ages_all < 18))
-    d["Has_Adult"]     = int(np.nanmax(ages_all) >= 18 if not np.isnan(ages_all).all() else 0)
 
     ages_elig = ages_all.copy()
     if int(exception_case) == 0:
@@ -181,20 +168,12 @@ def build_feature_row(father, mother, child_count, ages, exception_case):
     d["Eligible_Under18"]   = int(np.nansum(ages_elig < 18)) if not np.isnan(ages_elig).all() else 0
     d["Has_Eligible_Adult"] = int(np.nanmax(ages_elig) >= 18 if not np.isnan(ages_elig).all() else 0)
 
-    # Keep these guard features (do not affect symmetry)
-    d["Is_Single_Income"] = int(d["Father_income_cleaned"] == 0 or d["Mother_income_cleaned"] == 0)
-    d["Combined_Income_Zero"] = int(combined == 0)
-    d["No_Children"] = int(int(child_count) == 0)
-    d["Children_to_Eligible_Ratio"] = (int(child_count) / max(eligible_count, 1)) if int(child_count) > 0 else 0.0
-
     return pd.DataFrame([d]), eligible_count
 
 # -----------------------------------------------------------------------------
 # UI (unchanged)
 # -----------------------------------------------------------------------------
 st.title("Child Maintenance Estimator")
-
-# Compact description
 st.info(
     "**What this tool does**  \n"
     "• Gives a quick, ballpark estimate of the **family’s total monthly child maintenance**.  \n"
@@ -202,7 +181,6 @@ st.info(
     "• **Supports up to 4 children** today; future updates will allow more.  \n"
 )
 
-# Learn more expander (concise)
 with st.expander("Learn more about this tool", expanded=False):
     st.markdown("""
 **Purpose**  
@@ -218,7 +196,6 @@ The predicted maintenance range is an estimate based on provided inputs and shou
 with st.sidebar:
     st.header("Options")
     show_point = st.checkbox("Show point prediction", value=False)
-    # tiny model/env status footer
     try:
         import sklearn, numpy, pandas
         ts = datetime.datetime.fromtimestamp(os.path.getmtime(_model_path))
@@ -229,7 +206,6 @@ with st.sidebar:
     except Exception:
         pass
 
-# Inputs (no form → widgets rerender instantly)
 c1, c2 = st.columns(2)
 
 with c1:
@@ -252,14 +228,10 @@ with c2:
     for i in range(1, 5):
         if i <= int(child_count):
             r1, r2 = st.columns([1, 2])
-            u = r1.checkbox(
-                f"Child {i} under 1 year",
-                value=False,
-                key=f"u{i}",
-            )
+            u = r1.checkbox(f"Child {i} under 1 year", value=False, key=f"u{i}")
             if u:
                 r2.caption("Counted as less than 12 months")
-                ages.append(0.5)  # internal assumption
+                ages.append(0.5)
             else:
                 yrs = r2.number_input(
                     f"Child {i} age (years)",
@@ -270,7 +242,6 @@ with c2:
         else:
             ages.append(0.0)
 
-# Context hint: if any age ≥ 21 while exceptions = No, warn the user
 try:
     has_over21 = any(a >= 21 for a in ages[:int(child_count)])
     if has_over21 and exc == 0:
@@ -281,21 +252,14 @@ except Exception:
 go = st.button("Predict")
 
 if go:
-    # Coerce numeric types
     child_count = int(child_count)
-
-    # If both incomes are zero: show warning, stop (no numbers)
     combined_income = float(father) + float(mother)
     if combined_income == 0.0:
-        st.warning(
-            "Cannot generate an estimate when both parents' incomes are S$0. "
-            "Please enter at least one parent's income to continue."
-        )
+        st.warning("Cannot generate an estimate when both parents' incomes are S$0.")
         st.stop()
 
     X, eligible_count = build_feature_row(father, mother, child_count, ages, exc)
 
-    # Predict
     try:
         y = model.predict(X)
         y_pred = int(float(np.atleast_1d(y)[0]))
@@ -303,7 +267,6 @@ if go:
         st.error(f"Model predict failed: {e}")
         st.stop()
 
-    # Interval (prefer model's own; otherwise display-only fallback: centered $200 width, $50 rounding)
     lo, hi = None, None
     try:
         lo_arr, hi_arr = model.predict_interval(X)
@@ -316,7 +279,6 @@ if go:
         def _snap50(v): return int(round(v / 50.0) * 50)
         lo, hi = _snap50(lo), _snap50(hi)
 
-    # Output (escape $ to avoid math font)
     st.subheader("Predicted monthly child maintenance")
     if show_point:
         st.info(f"Point estimate: **{money(y_pred)}**")

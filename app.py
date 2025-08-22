@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd, numpy as np, joblib, cloudpickle, hashlib, os, datetime
 from io import BytesIO
@@ -44,7 +45,11 @@ except Exception:
 # -----------------------------------------------------------------------------
 # Model loading (auto, cached). No uploader shown to end users.
 # -----------------------------------------------------------------------------
-MODEL_FILENAME = "model_per_child_v2_calibrated_banded_rounded.joblib"
+# Prefer the new symmetric per-child pipeline artifact; fall back to old artifact if needed.
+CANDIDATE_MODEL_FILENAMES = [
+    "gb_per_child_perchild_symmetric.joblib",              # new symmetric per-child pipeline (preferred)
+    "model_per_child_v2_calibrated_banded_rounded.joblib" # legacy artifact
+]
 
 def try_load_joblib(fobj: BytesIO):
     """Attempt joblib first, then cloudpickle (for rare cases)."""
@@ -77,23 +82,45 @@ def _load_model_from_repo(path_str: str, file_hash: str):
         return try_load_joblib(f)
 
 _here = Path(__file__).parent.resolve()
-_model_path = _here / MODEL_FILENAME
-if not _model_path.exists():
-    st.error(f"Model file '{MODEL_FILENAME}' not found in the repo root. Add it next to app.py and redeploy.")
+
+# Choose the first candidate that exists
+_model_path = None
+for nm in CANDIDATE_MODEL_FILENAMES:
+    p = _here / nm
+    if p.exists():
+        _model_path = p
+        break
+
+if _model_path is None:
+    st.error("No model file found. Expected one of: " + ", ".join(CANDIDATE_MODEL_FILENAMES))
     st.stop()
 
 _model_hash = _file_md5(_model_path)
 model = _load_model_from_repo(str(_model_path), _model_hash)
+
+# If we loaded a per-child pipeline directly (symmetric model), wrap it so the app's API stays the same.
+try:
+    from sklearn.base import BaseEstimator
+    from cm_model import CMPerChildModelRounded as _CMCls
+    if not hasattr(model, "predict_interval"):
+        # Assume it's a per-child regressor pipeline → wrap with our standard container
+        _wrapper = _CMCls()
+        _wrapper.prep = None      # pipeline handles its own preprocessing if any
+        _wrapper.gb_pc_ = model   # pipeline outputs per-child prediction
+        _wrapper.iso_ = None
+        model = _wrapper
+except Exception:
+    pass
 
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
 def money(x: float) -> str:
     """Format currency without triggering math mode (escaped $, shown as S$)."""
-    return f"S\\${int(x):,}"
+    return f"S\${int(x):,}"
 
 # -----------------------------------------------------------------------------
-# Feature engineering (build exactly what the model expects)
+# Symmetric feature engineering (parent-invariant)
 # -----------------------------------------------------------------------------
 def compute_eligible_count(ages, exception_case: int) -> int:
     eligible = 0
@@ -108,6 +135,7 @@ def compute_eligible_count(ages, exception_case: int) -> int:
     return eligible
 
 def build_feature_row(father, mother, child_count, ages, exception_case):
+    # NOTE: This replaces directional shares with symmetric features, while keeping UI and outputs unchanged.
     a1, a2, a3, a4 = [float(x) for x in (ages + [0, 0, 0, 0])[:4]]
     d = {
         "Father_income_cleaned": float(father),
@@ -122,14 +150,11 @@ def build_feature_row(father, mother, child_count, ages, exception_case):
     combined = d["Father_income_cleaned"] + d["Mother_income_cleaned"]
     d["Combined_Income"] = combined
     d["Income_Diff_Abs"] = abs(d["Father_income_cleaned"] - d["Mother_income_cleaned"])
-    d["Father_Share"] = (d["Father_income_cleaned"] / combined) if combined != 0 else 0.0
-    d["Mother_Share"] = (d["Mother_income_cleaned"] / combined) if combined != 0 else 0.0
+    d["Income_Min"] = min(d["Father_income_cleaned"], d["Mother_income_cleaned"])
+    d["Income_Max"] = max(d["Father_income_cleaned"], d["Mother_income_cleaned"])
+
     den = max(eligible_count, 1)
     d["Combined_Income_per_Eligible"] = combined / den
-    d["Father_Income_per_Eligible"] = d["Father_income_cleaned"] / den
-    d["Mother_Income_per_Eligible"] = d["Mother_income_cleaned"] / den
-    d["Is_Single_Income"] = int(d["Father_income_cleaned"] == 0 or d["Mother_income_cleaned"] == 0)
-    d["Combined_Income_Zero"] = int(combined == 0)
 
     ages_all = np.array([a1, a2, a3, a4], dtype=float)
     ages_all = np.where(ages_all <= 0, np.nan, ages_all)
@@ -152,21 +177,20 @@ def build_feature_row(father, mother, child_count, ages, exception_case):
     d["Oldest_Age_Eligible"]   = float(np.nanmax(ages_elig)) if not np.isnan(ages_elig).all() else 0.0
     d["Avg_Age_Eligible"]      = float(np.nanmean(ages_elig)) if not np.isnan(ages_elig).all() else 0.0
 
-    d["Eligible_Under12"]   = int(np.nansum(ages_elig < 12))
-    d["Eligible_Under18"]   = int(np.nansum(ages_elig) < 18)  # guard against all-NaN
-    try:
-        d["Eligible_Under18"] = int(np.nansum(ages_elig < 18))
-    except Exception:
-        pass
+    d["Eligible_Under12"]   = int(np.nansum(ages_elig < 12)) if not np.isnan(ages_elig).all() else 0
+    d["Eligible_Under18"]   = int(np.nansum(ages_elig < 18)) if not np.isnan(ages_elig).all() else 0
     d["Has_Eligible_Adult"] = int(np.nanmax(ages_elig) >= 18 if not np.isnan(ages_elig).all() else 0)
 
+    # Keep these guard features (do not affect symmetry)
+    d["Is_Single_Income"] = int(d["Father_income_cleaned"] == 0 or d["Mother_income_cleaned"] == 0)
+    d["Combined_Income_Zero"] = int(combined == 0)
     d["No_Children"] = int(int(child_count) == 0)
     d["Children_to_Eligible_Ratio"] = (int(child_count) / max(eligible_count, 1)) if int(child_count) > 0 else 0.0
 
     return pd.DataFrame([d]), eligible_count
 
 # -----------------------------------------------------------------------------
-# UI
+# UI (unchanged)
 # -----------------------------------------------------------------------------
 st.title("Child Maintenance Estimator")
 
@@ -199,7 +223,7 @@ with st.sidebar:
         import sklearn, numpy, pandas
         ts = datetime.datetime.fromtimestamp(os.path.getmtime(_model_path))
         st.caption(
-            f"Model loaded • {MODEL_FILENAME} • updated {ts:%Y-%m-%d %H:%M} • "
+            f"Model loaded • {_model_path.name} • updated {ts:%Y-%m-%d %H:%M} • "
             f"sklearn {sklearn.__version__}, numpy {numpy.__version__}, pandas {pandas.__version__}"
         )
     except Exception:

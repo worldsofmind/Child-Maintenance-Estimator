@@ -153,7 +153,11 @@ def build_feature_row(father, mother, child_count, ages, exception_case):
     d["Avg_Age_Eligible"]      = float(np.nanmean(ages_elig)) if not np.isnan(ages_elig).all() else 0.0
 
     d["Eligible_Under12"]   = int(np.nansum(ages_elig < 12))
-    d["Eligible_Under18"]   = int(np.nansum(ages_elig < 18))
+    d["Eligible_Under18"]   = int(np.nansum(ages_elig) < 18)  # guard against all-NaN
+    try:
+        d["Eligible_Under18"] = int(np.nansum(ages_elig < 18))
+    except Exception:
+        pass
     d["Has_Eligible_Adult"] = int(np.nanmax(ages_elig) >= 18 if not np.isnan(ages_elig).all() else 0)
 
     d["No_Children"] = int(int(child_count) == 0)
@@ -173,6 +177,25 @@ st.info(
     "• Built for **practitioners** (e.g., legal clinics); **not** public self-service.  \n"
     "• **Supports up to 4 children** today; future updates will allow more.  \n"
 )
+
+# Learn more expander (concise)
+with st.expander("Learn more about this tool", expanded=False):
+    st.markdown("""
+**Purpose**  
+Gives a quick, realistic starting point for the **family’s total monthly child maintenance**. Built for **practitioners** (e.g., legal clinics), not public self-service.
+
+**How it works**  
+Trained on LAB case data. Uses a per-eligible-child formulation, then multiplies by the eligible count. Shows a **range** (kept reasonably tight for usability, about **S\\$200**) and an optional point estimate.
+
+**Eligibility (children ≥21)**  
+If an exception applies (**NS / still studying full-time / disability**), adult child(ren) can be counted as eligible (pilot: include up to one adult child).
+
+**Scope**  
+Currently supports **up to 4 children**.
+
+**Disclaimer**  
+This is an indicative estimate, not legal or financial advice.
+""")
 
 with st.sidebar:
     st.header("Options")

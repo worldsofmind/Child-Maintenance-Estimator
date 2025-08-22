@@ -6,7 +6,12 @@ from pathlib import Path
 # -----------------------------------------------------------------------------
 # Page config
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Child Maintenance Estimator", page_icon="👶", layout="centered")
+st.set_page_config(
+    page_title="Child Maintenance Estimator",
+    page_icon="👶",
+    layout="centered",
+    initial_sidebar_state="collapsed",  # Sidebar collapsed on first load
+)
 
 # -----------------------------------------------------------------------------
 # Compatibility shims (safe, no-ops if not needed)

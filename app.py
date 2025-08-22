@@ -166,7 +166,6 @@ st.info(
     "**What this tool does**  \n"
     "• Gives a quick, ballpark estimate of the **family’s total monthly child maintenance**.  \n"
     "• Built for **practitioners** (e.g., legal clinics); **not** public self-service.  \n"
-     "• **Supports up to 4 children** today; future updates will allow more.  \n"
 )
 
 # Optional: full details in a collapsed section
@@ -219,13 +218,21 @@ with c2:
     for i in range(1, 5):
         if i <= int(child_count):
             r1, r2 = st.columns([1, 2])
-            u = r1.checkbox(f"Child {i} under 1", value=False, key=f"u{i}")
+            u = r1.checkbox(
+                f"Child {i} under 1 year",
+                value=False,
+                key=f"u{i}",
+                help="If checked, the model treats this child as age 0.5 for calculation."
+            )
             if u:
-                r2.markdown("Age: **Under 1** (≈ 6 months)")
-                ages.append(0.5)
+                r2.caption("Counted as less than 12 months")
+                ages.append(0.5)  # internal assumption
             else:
-                yrs = r2.number_input(f"Child {i} age (years)", min_value=0.0, max_value=25.0,
-                                      step=1.0, value=0.0, format="%.0f", key=f"a{i}_years")
+                yrs = r2.number_input(
+                    f"Child {i} age (years)",
+                    min_value=0.0, max_value=25.0, step=1.0, value=0.0, format="%.0f",
+                    key=f"a{i}_years"
+                )
                 ages.append(yrs)
         else:
             ages.append(0.0)

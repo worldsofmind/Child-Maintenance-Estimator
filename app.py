@@ -222,8 +222,8 @@ with c2:
                 f"Child {i} under 1 year",
                 value=False,
                 key=f"u{i}",
-                help="If checked, the model treats this child as age 0.5 for calculation."
             )
+            
             if u:
                 r2.caption("Counted as less than 12 months")
                 ages.append(0.5)  # internal assumption

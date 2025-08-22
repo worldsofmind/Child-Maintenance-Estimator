@@ -84,8 +84,8 @@ model = _load_model_from_repo(str(_model_path), _model_hash)
 # Helpers
 # -----------------------------------------------------------------------------
 def money(x: float) -> str:
-    """Format currency without triggering math mode."""
-    return f"\\${int(x):,}"
+    """Format currency without triggering math mode (escaped $, shown as S$)."""
+    return f"S\\${int(x):,}"
 
 # -----------------------------------------------------------------------------
 # Feature engineering (build exactly what the model expects)
@@ -166,20 +166,8 @@ st.info(
     "**What this tool does**  \n"
     "• Gives a quick, ballpark estimate of the **family’s total monthly child maintenance**.  \n"
     "• Built for **practitioners** (e.g., legal clinics); **not** public self-service.  \n"
+    "• **Supports up to 4 children** today; future updates will allow more.  \n"
 )
-
-# Optional: full details in a collapsed section
-with st.expander("Learn more about the model", expanded=False):
-    st.markdown("""
-**Purpose of model**  
-The estimator uses a small set of factors to produce a realistic starting point. Practitioners can then consider: (a) contribution split by relative incomes; (b) per-child allocation by age/needs.
-
-**Design of model**  
-Trained on LAB case data. Focused on practical, high-signal factors. Aims to keep the range within about **$200**. 
-
-**Disclaimer**  
-The predicted maintenance range is an estimate based on provided inputs and should not be considered as legal or financial advice. It’s a guide to help begin negotiations.
-""")
 
 with st.sidebar:
     st.header("Options")
@@ -223,7 +211,6 @@ with c2:
                 value=False,
                 key=f"u{i}",
             )
-            
             if u:
                 r2.caption("Counted as less than 12 months")
                 ages.append(0.5)  # internal assumption
@@ -250,6 +237,15 @@ go = st.button("Predict")
 if go:
     # Coerce numeric types
     child_count = int(child_count)
+
+    # If both incomes are zero: show warning, stop (no numbers)
+    combined_income = float(father) + float(mother)
+    if combined_income == 0.0:
+        st.warning(
+            "Cannot generate an estimate when both parents' incomes are S$0. "
+            "Please enter at least one parent's income to continue."
+        )
+        st.stop()
 
     X, eligible_count = build_feature_row(father, mother, child_count, ages, exc)
 

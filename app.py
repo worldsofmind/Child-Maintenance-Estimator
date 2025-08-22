@@ -185,16 +185,10 @@ with st.expander("Learn more about this tool", expanded=False):
 Gives a quick, realistic starting point for the **family’s total monthly child maintenance**. Built for **practitioners** (e.g., legal clinics), not public self-service.
 
 **How it works**  
-Trained on LAB case data. Uses a per-eligible-child formulation, then multiplies by the eligible count. Shows a **range** (kept reasonably tight for usability, about **S\\$200**) and an optional point estimate.
-
-**Eligibility (children ≥21)**  
-If an exception applies (**NS / still studying full-time / disability**), adult child(ren) can be counted as eligible (pilot: include up to one adult child).
-
-**Scope**  
-Currently supports **up to 4 children**.
+Trained on LAB actual case data.
 
 **Disclaimer**  
-This is an indicative estimate, not legal or financial advice.
+The predicted maintenance range is an estimate based on provided inputs and should not be considered as legal or financial advice.
 """)
 
 with st.sidebar:

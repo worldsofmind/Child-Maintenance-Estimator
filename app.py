@@ -53,7 +53,7 @@ CANDIDATE_MODEL_FILENAMES = [
     "gb_per_child_perchild_symmetric_STRICT.joblib",
     "gb_per_child_perchild_symmetric.joblib",
     "model_per_child_v2_calibrated_banded_rounded.joblib",
-    "gb_per_child_perchild_symmetric_STRICT (2).joblib",
+    gb_per_child_perchild_symmetric_STRICT_py311.joblib",
 ]
 
 def try_load_joblib(fobj: BytesIO):

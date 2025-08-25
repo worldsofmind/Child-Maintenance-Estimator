@@ -1,12 +1,39 @@
-
 import streamlit as st
-import pandas as pd, numpy as np, joblib, cloudpickle, hashlib, os, datetime
+import pandas as pd, numpy as np, joblib, cloudpickle, os, datetime
 from io import BytesIO
 from pathlib import Path
 
 st.set_page_config(page_title="Child Maintenance Estimator", page_icon="👶", layout="centered", initial_sidebar_state="collapsed")
 
-# Compatibility: ensure custom class resolvable
+# --- Compatibility shims for legacy pickles on Py3.11 / NumPy 1.23+ ---
+# Some artifacts store numpy.random.RandomState via a helper ctor with an older signature.
+# We provide a tolerant ctor so unpickling doesn't explode.
+try:
+    import numpy.random as _npr
+    if not hasattr(_npr, "__randomstate_ctor"):
+        # define if absent
+        def __randomstate_ctor(state=None, *args, **kwargs):
+            rs = _npr.RandomState()
+            if state is not None:
+                rs.set_state(state)
+            return rs
+        _npr.__randomstate_ctor = __randomstate_ctor  # type: ignore[attr-defined]
+    else:
+        # wrap existing to accept extra args
+        _orig = _npr.__randomstate_ctor  # type: ignore[attr-defined]
+        def _shim(state=None, *args, **kwargs):
+            try:
+                return _orig(state)  # current signature
+            except TypeError:
+                rs = _npr.RandomState()
+                if state is not None:
+                    rs.set_state(state)
+                return rs
+        _npr.__randomstate_ctor = _shim  # type: ignore[attr-defined]
+except Exception:
+    pass
+
+# Ensure custom class is resolvable during unpickling
 try:
     from cm_model import CMPerChildModelRounded as _CMCls
     import __main__ as _mn
@@ -14,10 +41,12 @@ try:
 except Exception:
     pass
 
+# Expected model filenames + the common "(2)" variant
 CANDIDATE_MODEL_FILENAMES = [
     "gb_per_child_perchild_symmetric_STRICT.joblib",
     "gb_per_child_perchild_symmetric.joblib",
-    "model_per_child_v2_calibrated_banded_rounded.joblib"
+    "model_per_child_v2_calibrated_banded_rounded.joblib",
+    "gb_per_child_perchild_symmetric_STRICT (2).joblib",
 ]
 
 def try_load_joblib(fobj: BytesIO):
@@ -25,11 +54,19 @@ def try_load_joblib(fobj: BytesIO):
     try:
         return joblib.load(fobj)
     except Exception as e_joblib:
-        try: fobj.seek(pos)
-        except Exception: pass
-        try: return cloudpickle.load(fobj)
+        try:
+            fobj.seek(pos)
+        except Exception:
+            pass
+        try:
+            return cloudpickle.load(fobj)
         except Exception as e_cp:
             raise RuntimeError(f"Failed to load model via joblib ({e_joblib}) and cloudpickle ({e_cp})")
+
+@st.cache_resource
+def _load_model_from_repo(path_str: str, file_hash: str):
+    with open(path_str, "rb") as f:
+        return try_load_joblib(f)
 
 def _file_md5(path: Path) -> str:
     import hashlib
@@ -39,11 +76,6 @@ def _file_md5(path: Path) -> str:
             h.update(chunk)
     return h.hexdigest()
 
-@st.cache_resource
-def _load_model_from_repo(path_str: str, file_hash: str):
-    with open(path_str, "rb") as f:
-        return try_load_joblib(f)
-
 _here = Path(__file__).parent.resolve()
 _model_path = None
 for nm in CANDIDATE_MODEL_FILENAMES:
@@ -52,14 +84,26 @@ for nm in CANDIDATE_MODEL_FILENAMES:
         _model_path = p
         break
 
+# Fallback: pick the first .joblib at repo root if none of the preferred names exist
+if _model_path is None:
+    jobs = sorted(_here.glob("*.joblib"))
+    if jobs:
+        _model_path = jobs[0]
+
 if _model_path is None:
     st.error("No model file found. Expected one of: " + ", ".join(CANDIDATE_MODEL_FILENAMES))
     st.stop()
 
 _model_hash = _file_md5(_model_path)
-model = _load_model_from_repo(str(_model_path), _model_hash)
 
-# Wrap per-child pipeline if needed
+# Show the real error in the UI if loading fails
+try:
+    model = _load_model_from_repo(str(_model_path), _model_hash)
+except Exception as e:
+    st.exception(e)
+    st.stop()
+
+# If needed, wrap a bare per-child estimator with your rounding/display class
 try:
     from cm_model import CMPerChildModelRounded as _CMCls
     if not hasattr(model, "predict_interval"):
@@ -74,19 +118,23 @@ except Exception:
 def money(x: float) -> str:
     return f"S\\${int(x):,}"
 
-# Strict symmetric features (no raw father/mother columns)
+# Symmetric feature builder (X/Y incomes)
 def compute_eligible_count(ages, exception_case: int) -> int:
     eligible = 0
     for a in ages:
-        if a is None or a <= 0: continue
-        if a < 21: eligible += 1
+        if a is None or a <= 0:
+            continue
+        if a < 21:
+            eligible += 1
         else:
-            if int(exception_case) == 1: eligible += 1
+            if int(exception_case) == 1:
+                eligible += 1
     return eligible
 
 STRICT_FEATURE_ORDER = ["No. of children of the marriage", "Child1_Age", "Child2_Age", "Child3_Age", "Child4_Age", "exception_case", "Eligible_Child_Count", "Combined_Income", "Income_Diff_Abs", "Income_Min", "Income_Max", "Combined_Income_per_Eligible", "Youngest_Age_All", "Oldest_Age_All", "Avg_Age_All", "Age_Gap_All", "Count_Under7", "Count_Under12", "Count_Under18", "Youngest_Age_Eligible", "Oldest_Age_Eligible", "Avg_Age_Eligible", "Eligible_Under12", "Eligible_Under18", "Has_Eligible_Adult"]
 
 def build_feature_row(father, mother, child_count, ages, exception_case):
+    import numpy as _np
     a1, a2, a3, a4 = [float(x) for x in (ages + [0,0,0,0])[:4]]
     elig = compute_eligible_count([a1,a2,a3,a4], exception_case)
 
@@ -97,27 +145,27 @@ def build_feature_row(father, mother, child_count, ages, exception_case):
     den = max(elig, 1)
     combined_per_elig = combined / den
 
-    ages_all = np.array([a1,a2,a3,a4], dtype=float)
-    ages_all = np.where(ages_all <= 0, np.nan, ages_all)
+    ages_all = _np.array([a1,a2,a3,a4], dtype=float)
+    ages_all = _np.where(ages_all <= 0, _np.nan, ages_all)
 
-    youngest_all = float(np.nanmin(ages_all)) if not np.isnan(ages_all).all() else 0.0
-    oldest_all   = float(np.nanmax(ages_all)) if not np.isnan(ages_all).all() else 0.0
-    avg_all      = float(np.nanmean(ages_all)) if not np.isnan(ages_all).all() else 0.0
+    youngest_all = float(_np.nanmin(ages_all)) if not _np.isnan(ages_all).all() else 0.0
+    oldest_all   = float(_np.nanmax(ages_all)) if not _np.isnan(ages_all).all() else 0.0
+    avg_all      = float(_np.nanmean(ages_all)) if not _np.isnan(ages_all).all() else 0.0
     gap_all      = oldest_all - youngest_all
 
-    cnt_u7  = int(np.nansum(ages_all < 7))
-    cnt_u12 = int(np.nansum(ages_all < 12))
-    cnt_u18 = int(np.nansum(ages_all < 18))
+    cnt_u7  = int(_np.nansum(ages_all < 7))
+    cnt_u12 = int(_np.nansum(ages_all < 12))
+    cnt_u18 = int(_np.nansum(ages_all < 18))
 
     ages_elig = ages_all.copy()
     if int(exception_case) == 0:
-        ages_elig = np.where(ages_elig >= 21, np.nan, ages_elig)
-    youngest_elig = float(np.nanmin(ages_elig)) if not np.isnan(ages_elig).all() else 0.0
-    oldest_elig   = float(np.nanmax(ages_elig)) if not np.isnan(ages_elig).all() else 0.0
-    avg_elig      = float(np.nanmean(ages_elig)) if not np.isnan(ages_elig).all() else 0.0
-    elig_u12      = int(np.nansum(ages_elig < 12)) if not np.isnan(ages_elig).all() else 0
-    elig_u18      = int(np.nansum(ages_elig < 18)) if not np.isnan(ages_elig).all() else 0
-    has_elig_adult = int(np.nanmax(ages_elig) >= 18 if not np.isnan(ages_elig).all() else 0)
+        ages_elig = _np.where(ages_elig >= 21, _np.nan, ages_elig)
+    youngest_elig = float(_np.nanmin(ages_elig)) if not _np.isnan(ages_elig).all() else 0.0
+    oldest_elig   = float(_np.nanmax(ages_elig)) if not _np.isnan(ages_elig).all() else 0.0
+    avg_elig      = float(_np.nanmean(ages_elig)) if not _np.isnan(ages_elig).all() else 0.0
+    elig_u12      = int(_np.nansum(ages_elig < 12)) if not _np.isnan(ages_elig).all() else 0
+    elig_u18      = int(_np.nansum(ages_elig < 18)) if not _np.isnan(ages_elig).all() else 0
+    has_elig_adult = int(_np.nanmax(ages_elig) >= 18 if not _np.isnan(ages_elig).all() else 0)
 
     row = {
         "No. of children of the marriage": int(child_count),
@@ -144,24 +192,11 @@ def build_feature_row(father, mother, child_count, ages, exception_case):
         "Has_Eligible_Adult": has_elig_adult,
     }
     X = pd.DataFrame([row])
-    # Reorder to match training exactly
     X = X[STRICT_FEATURE_ORDER]
     return X, int(elig)
 
 st.title("Child Maintenance Estimator")
 st.info("**What this tool does**  \n• Gives a quick, ballpark estimate of the **family’s total monthly child maintenance**.  \n• Built for **practitioners** (e.g., legal clinics); **not** public self-service.  \n• **Supports up to 4 children** today; future updates will allow more.")
-
-with st.expander("Learn more about this tool", expanded=False):
-    st.markdown("""
-**Purpose**  
-Gives a quick, realistic starting point for the **family’s total monthly child maintenance**. Built for **practitioners** (e.g., legal clinics), not public self-service.
-
-**How it works**  
-Trained on LAB actual case data.
-
-**Disclaimer**  
-The predicted maintenance range is an estimate based on provided inputs and should not be considered as legal or financial advice.
-""")
 
 with st.sidebar:
     st.header("Options")

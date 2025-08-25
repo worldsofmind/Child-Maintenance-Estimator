@@ -1,36 +1,43 @@
 import streamlit as st
-import pandas as pd, numpy as np, joblib, cloudpickle, os, datetime
+import pandas as pd, numpy as np, joblib, cloudpickle, os, datetime, pickle
 from io import BytesIO
 from pathlib import Path
 
 st.set_page_config(page_title="Child Maintenance Estimator", page_icon="👶", layout="centered", initial_sidebar_state="collapsed")
 
-# --- Compatibility shims for legacy pickles on Py3.11 / NumPy 1.23+ ---
-# Some artifacts store numpy.random.RandomState via a helper ctor with an older signature.
-# We provide a tolerant ctor so unpickling doesn't explode.
+# --- Robust compatibility shims for legacy pickles on Py3.11 / NumPy 1.23+ ---
+# Some artifacts store numpy.random.RandomState via helper ctors whose signatures changed.
+# We provide tolerant ctors in BOTH numpy.random and numpy.random.mtrand namespaces.
 try:
     import numpy.random as _npr
-    if not hasattr(_npr, "__randomstate_ctor"):
-        # define if absent
-        def __randomstate_ctor(state=None, *args, **kwargs):
-            rs = _npr.RandomState()
-            if state is not None:
-                rs.set_state(state)
-            return rs
-        _npr.__randomstate_ctor = __randomstate_ctor  # type: ignore[attr-defined]
-    else:
-        # wrap existing to accept extra args
-        _orig = _npr.__randomstate_ctor  # type: ignore[attr-defined]
-        def _shim(state=None, *args, **kwargs):
+    try:
+        import numpy.random.mtrand as _mtrand
+    except Exception:
+        _mtrand = None
+
+    def _rs_ctor_compat(*args, **kwargs):
+        # Accept (state,), (state, legacy_flag), or nothing.
+        state = args[0] if len(args) > 0 else None
+        rs = _npr.RandomState()
+        if state is not None:
             try:
-                return _orig(state)  # current signature
-            except TypeError:
-                rs = _npr.RandomState()
-                if state is not None:
-                    rs.set_state(state)
-                return rs
-        _npr.__randomstate_ctor = _shim  # type: ignore[attr-defined]
+                rs.set_state(state)
+            except Exception:
+                # Some old pickles store state with different structure; best-effort only.
+                pass
+        return rs
+
+    for mod in filter(None, (_npr, _mtrand)):
+        try:
+            setattr(mod, "__randomstate_ctor", _rs_ctor_compat)
+        except Exception:
+            pass
+        try:
+            setattr(mod, "_randomstate_ctor", _rs_ctor_compat)
+        except Exception:
+            pass
 except Exception:
+    # Shims are best-effort; continue either way.
     pass
 
 # Ensure custom class is resolvable during unpickling
@@ -51,6 +58,7 @@ CANDIDATE_MODEL_FILENAMES = [
 
 def try_load_joblib(fobj: BytesIO):
     pos = fobj.tell()
+    # 1) joblib
     try:
         return joblib.load(fobj)
     except Exception as e_joblib:
@@ -58,10 +66,22 @@ def try_load_joblib(fobj: BytesIO):
             fobj.seek(pos)
         except Exception:
             pass
+        # 2) stdlib pickle with python2-compat encoding (handles some legacy object arrays)
         try:
-            return cloudpickle.load(fobj)
-        except Exception as e_cp:
-            raise RuntimeError(f"Failed to load model via joblib ({e_joblib}) and cloudpickle ({e_cp})")
+            return pickle.load(fobj, encoding="latin1")  # type: ignore[call-arg]
+        except Exception as e_pickle:
+            try:
+                fobj.seek(pos)
+            except Exception:
+                pass
+            # 3) cloudpickle
+            try:
+                return cloudpickle.load(fobj)
+            except Exception as e_cp:
+                raise RuntimeError(
+                    "Failed to load model via joblib ({}) and pickle({}) and cloudpickle ({})"
+                    .format(e_joblib, e_pickle, e_cp)
+                )
 
 @st.cache_resource
 def _load_model_from_repo(path_str: str, file_hash: str):

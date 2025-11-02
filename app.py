@@ -41,8 +41,26 @@ def _file_md5(path: Path) -> str:
 
 @st.cache_resource
 def _load_model_from_repo(path_str: str, file_hash: str):
-    with open(path_str, "rb") as f:
-        return try_load_joblib(f)
+    """Robust loader for Streamlit Cloud: try joblib via path first, then file object, then cloudpickle."""
+    import joblib, cloudpickle
+    # 1) Prefer path-based load (most robust in Streamlit Cloud)
+    try:
+        return joblib.load(path_str)
+    except Exception as e_path:
+        # 2) Fallback: open file object for joblib
+        try:
+            with open(path_str, "rb") as f:
+                return joblib.load(f)
+        except Exception as e_joblib:
+            # 3) Last resort: cloudpickle.load
+            with open(path_str, "rb") as f:
+                try:
+                    return cloudpickle.load(f)
+                except Exception as e_cp:
+                    raise RuntimeError(
+                        f"Failed to load model: joblib(path)={e_path}; "
+                        f"joblib(file)={e_joblib}; cloudpickle={e_cp}"
+                    )
 
 _here = Path(__file__).parent.resolve()
 _model_path = None
